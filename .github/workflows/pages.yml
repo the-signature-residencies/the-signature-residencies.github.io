@@ -1,0 +1,61 @@
+name: Publish website
+
+on:
+  push:
+    branches: [redesign]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/redesign'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the website
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify publication contents
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          root_files = {'public/index.html', 'public/favicon.svg', 'public/og.jpg', 'public/robots.txt'}
+          config = {'README.md', '.gitignore', '.github/workflows/pages.yml'}
+          extensions = {'.avif', '.webp', '.jpg', '.jpeg', '.png', '.svg', '.css', '.js', '.woff', '.woff2'}
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().strip('\0').split('\0')
+          assert root_files.issubset(paths), 'Required website files missing'
+          for name in paths:
+              p = Path(name)
+              allowed = name in config | root_files or (p.parent.as_posix() == 'public/_astro' and p.suffix in extensions)
+              assert allowed and not p.is_symlink(), f'Unexpected publication file: {name}'
+              if name.startswith('public/') and p.suffix in {'.html', '.js', '.css', '.svg', '.txt'}:
+                  text = p.read_text()
+                  assert not re.search(r'/home/|/Users/|/tmp/|given-by-client|research/|sourceMappingURL|github_pat_|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----', text), f'Private data marker: {name}'
+          html = Path('public/index.html').read_text()
+          assert 'rel="canonical" href="https://the-signature-residencies.github.io/"' in html
+          print(f'Verified {len(paths)} website and deployment files')
+          PY
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+      - name: Upload the website
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+      - name: Publish the website
+        id: deployment
+        uses: actions/deploy-pages@v5
